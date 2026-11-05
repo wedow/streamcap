@@ -104,4 +104,4 @@ class EventLog {
   }
 }
 
-export {$, h, mkCanvas, fmt, fmtMB, slug, stamp, rid, sleep, initials, LS, PID, idb, ensurePerm, toast, modal, ticker, tickers, stats, fileWriter, recordStream, EventLog}
+export {$, h, mkCanvas, fmt, fmtMB, slug, stamp, rid, sleep, initials, LS, PID, idb, ensurePerm, toast, modal, tickers, fileWriter, recordStream, EventLog}

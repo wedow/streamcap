@@ -131,6 +131,4 @@ setInterval(() => {
   meterEl.style.width = Math.min(100, pk / 128 * 180) + '%'
 }, 80)
 
-// ======================= layouts / compositor =======================
-
-export {ac, resumeAudio, settings, me, cam, mic, localStream, drawFit, camTick, loadSegmenter, setBlur, openCam, openMic, stopLocalDevices, refreshDevices, meterBuf, meterEl, stopMeter}
+export {ac, resumeAudio, settings, me, cam, mic, localStream, drawFit, loadSegmenter, setBlur, openCam, openMic, stopLocalDevices, refreshDevices, stopMeter}

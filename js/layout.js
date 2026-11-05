@@ -109,6 +109,4 @@ function layoutControls(host, get, set, keysFn) {
   return {render}
 }
 
-// ======================= room state =======================
-
-export {LAYOUT_MODES, defaultLayout, orderItems, resolveMode, computeRects, composite, drawTile, layoutControls}
+export {LAYOUT_MODES, defaultLayout, composite, layoutControls}

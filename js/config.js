@@ -16,4 +16,4 @@ const FEED_MIME = (EXT === 'mp4' && ['video/mp4;codecs=avc3,mp4a.40.2', 'video/m
 const PW = 1920, PH = 1080, CW = 1280, CH = 720
 const CHUNK = 512 * 1024
 
-export {qs, TRYSTERO_URL, MP_VER, MP_URL, MP_WASM, MP_MODEL, APP_ID, ICE, MIME, EXT, FEED_MIME, PW, PH, CW, CH, CHUNK}
+export {qs, TRYSTERO_URL, MP_URL, MP_WASM, MP_MODEL, APP_ID, ICE, MIME, EXT, FEED_MIME, PW, PH, CW, CH, CHUNK}

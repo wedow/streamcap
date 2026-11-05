@@ -234,6 +234,4 @@ $('#edApplyAll').onclick = () => { ed.kfs = [{t: 0, layout: layoutAt(ed.t).layou
 $('#edPreferHQ').onchange = () => { saveEdits(); edSync() }
 $('#edBack').onclick = () => { if (ed.rendering) return toast('Cancel the render first'); location.href = location.pathname }
 
-// ======================= lobby & wiring =======================
-
-export {ed, openEditor, keyName, layoutAt, stateAt, cutAt, activeSegs, edSync, edItems, edLast, edUiAt, edPlay, edPause, edSeek, pct, renderTimeline, renderOverlay, updatePlayhead, addCut, edChanged, saveT, saveEdits, renderLists, edLayoutCtl, startRender, finishRender}
+export {ed, openEditor, edPlay, edPause, edSeek}
