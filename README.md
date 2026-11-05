@@ -25,4 +25,4 @@ then open http://localhost:8000.
 
 ## Deploy
 
-GitHub Pages → Settings → Pages → "Deploy from a branch", branch `main`, folder `/ (root)`.
+GitHub Pages → Settings → Pages → "Deploy from a branch", branch `master`, folder `/ (root)`.
