@@ -23,7 +23,7 @@ Two participants ("peers") are needed for most tests: two browser profiles, two 
 
 **LOB-1 Preview.** Open the app. Pass: the camera preview shows moving video, the mic meter moves, and the console has no errors besides a missing favicon.
 
-**LOB-2 Rapid device switching.** With 2+ cameras and mics, switch the *Camera* and *Microphone* selects back and forth quickly about 10 times, then wait a few seconds. Pass: preview shows the last chosen camera. Count live tracks with `navigator.mediaDevices` accounting (or the OS camera indicator): exactly one camera and one mic capture stay open. Superseded opens are stopped. *With fake devices there is one camera and the selects are hidden. Call `openCam`/`openMic` repeatedly via a routed module or mark BLOCKED.*
+**LOB-2 Rapid device switching.** With 2+ cameras and mics, switch the *Camera* and *Microphone* selects back and forth quickly about 10 times, then wait a few seconds. Pass: preview shows the last chosen camera. Count live tracks with `navigator.mediaDevices` accounting (or the OS camera indicator): exactly one camera and one mic capture stay open. Superseded opens are stopped. *With fake devices there is one camera (its select is hidden) and three mics. In `eval`, `await import('/js/media.js')` returns the app's own module instance: call `openCam('')`/`openMic('')` repeatedly and wrap `getUserMedia` to count live tracks.*
 
 **LOB-3 Settings persist.** Set name, background, and the full-quality option, then reload. Pass: all three are restored.
 
@@ -39,7 +39,7 @@ Two participants ("peers") are needed for most tests: two browser profiles, two 
 
 **JOIN-3 Peer leaves.** B clicks *Leave*. Pass: A sees B's tile disappear and "B left" in chat. If A is recording, `events.jsonl` gets `peer-leave` for B.
 
-**JOIN-4 feedEnd isolation.** With B sharing its screen in A's call, peer C sends a `feedEnd` message naming B's screen key (from C's console: drive the room's `feedEnd` action, e.g. via a routed `js/call.js` exposing the action). Pass: A still shows B's screen. When B stops sharing, A removes it.
+**JOIN-4 feedEnd isolation.** With B sharing its screen in A's call, peer C sends a `feedEnd` message naming B's screen key (from C's console: `(await import('/js/call.js')).room.makeAction('feedEnd').send({key: '<B-pid>:screen'})`). Pass: A still shows B's screen. When B stops sharing, A removes it.
 
 ### Chat and markers
 
@@ -55,7 +55,7 @@ Two participants ("peers") are needed for most tests: two browser profiles, two 
 
 **REC-3 One recorder fails, stop still finishes.** Make one feed's writer fail (harness: inject a write failure for a single file name). Then stop. Pass: the other files and `events.jsonl` are finalized, `session-stop` is logged, the "Saved …" toast appears, and *Record* returns.
 
-**REC-4 Disk write failure.** Inject write failures for all files after about 1 MB (harness). Pass: each failing file shows **one** "Writing “<file>” failed" toast that persists and does not repeat. The failed recorders stop writing. Pressing *Stop recording* finishes cleanly with the "Saved" toast. *Note: the app does not auto-stop the session on write failure. If the expectation is an automatic stop, report FAIL.*
+**REC-4 Disk write failure.** Inject write failures for all files after about 1 MB (harness). Pass: each failing file shows **one** "Writing “<file>” failed" toast that persists and does not repeat. The failed recorders stop writing. Pressing *Stop recording* finishes cleanly with the "Saved" toast. *Intended: the affected recording stops cleanly. If the session keeps recording after its writers failed, report FAIL.*
 
 **REC-5 Folder change.** In *Producer*, use *Recording folder…* to pick another folder, then record. Pass: the new session lands in the new folder, and the folder name is shown next to the button.
 
@@ -71,15 +71,15 @@ Two participants ("peers") are needed for most tests: two browser profiles, two 
 
 **HQ-1 "Always" mode.** B sets *Always send it automatically*. A records 20 s and stops. Pass: B shows a sending toast with progress, then "Sent full-quality files to A". A shows "Receiving…" then "Received full-quality files from B". A's folder has `hq-b-…` files and `events.jsonl` has a matching `hq-file` event.
 
-**HQ-2 "Ask" mode.** B uses *Ask before sending it to them*. A records and stops. Pass: B gets the dialog "Send full-quality recording?" with file count and size. *Send* behaves as HQ-1. *Not now* sends nothing, and A's incoming list shows B as declined.
+**HQ-2 "Ask" mode.** B uses *Ask before sending it to them*. A records and stops. Pass: B gets the dialog "Send full-quality recording?" with file count and size. *Send* behaves as HQ-1. *Not now* sends nothing, and A's incoming list shows B as declined (the list is visible only in A's leave dialog while some other transfer is pending).
 
 **HQ-3 "Never".** B uses *Don't keep a local copy*. Pass: no "Full-quality local copy" badge on B while A records, nothing in B's `hq/`, and no dialog.
 
-**HQ-4 Peer leaves mid-transfer.** Make the transfer large (record a few minutes). B closes its tab while sending. Pass: A's receive dialog (shown if A leaves) marks B "disconnected" rather than hanging. A can leave. The partial `hq-` file does not crash the editor.
+**HQ-4 Peer leaves mid-transfer.** Make the transfer large (record a few minutes). B closes its tab while sending. Pass: A's receive dialog (shown if A leaves) marks B "disconnected", or closes when nothing else is pending, rather than hanging. A can leave. The partial `hq-` file does not crash the editor.
 
 **HQ-5 Leaving with the send dialog open.** B in ask mode. A stops recording, and B's "Send full-quality recording?" dialog appears. B clicks *Leave* without answering. Pass: leave waits for that same dialog, with no second dialog. After B answers, leave proceeds, and with *Send* the transfer completes before B's page reloads.
 
-**HQ-6 Peer-supplied filenames ignored.** From B, send a chunk to A's `hq` action with malicious metadata (e.g. `info.kind: "../x"`, an extra `name`/`file` field) and without announcing a plan first. Pass: unannounced chunks are rejected. Announced chunks land as `hq-<B-name>-<B-pid>-<cam|screen>-<random>.<ext>` named by A, never outside the session folder, and never more bytes than announced.
+**HQ-6 Peer-supplied filenames ignored.** From B, send a chunk to A's `hq` action (`room.makeAction('hq', {kind: 'request', onRequest: () => ({ok: false})}).request(buf, {target, metadata})`, plan via `makeAction('hqPlan')`; A's `recId` is `(await import('/js/recording.js')).session.recId`) with malicious metadata (e.g. `info.kind: "../x"`, an extra `name`/`file` field) and without announcing a plan first. Pass: unannounced chunks are rejected. Announced chunks land as `hq-<B-name>-<B-pid>-<cam|screen>-<random>.<ext>` named by A, never outside the session folder, and never more bytes than announced.
 
 ### Leaving
 
@@ -87,7 +87,7 @@ Two participants ("peers") are needed for most tests: two browser profiles, two 
 
 **LEAVE-2 Event log after leave.** A records, B uses "always", A stops and leaves. Pass: A's final `events.jsonl` contains `session-stop` and the `hq-file` entries for B, even if they arrived during leave.
 
-**LEAVE-3 Recorder waits for incoming.** A leaves right after stopping while B is still sending. Pass: A shows "Receiving full-quality files…" with progress, closes it automatically when done, and *Leave anyway* works.
+**LEAVE-3 Recorder waits for incoming.** A leaves right after stopping while B is still sending (locally transfers finish in about a second: slow B's sender, see harness). Pass: A shows "Receiving full-quality files…" with progress, closes it automatically when done, and *Leave anyway* works.
 
 ### Leftover files
 
@@ -128,11 +128,13 @@ Validated with `playwright-cli` and headless Chromium. Fake media, the OPFS pick
     playwright-cli -s=a open --config=docs/qa/playwright-cli.json http://localhost:8765/
     playwright-cli -s=b open --config=docs/qa/playwright-cli.json http://localhost:8765/
 
-Drive each peer with `-s=a` / `-s=b`: `snapshot` to find controls by label, then `click`/`fill`/`select`. Close with `playwright-cli close-all`. The fake device is a single camera and mic, so the device selects stay hidden (see LOB-2).
+Drive each peer with `-s=a` / `-s=b`: `snapshot` to find controls by label, then `click`/`fill`/`select`. Close with `playwright-cli close-all`. The fake camera is a single device, so the *Camera* select stays hidden (see LOB-2). `goto` to a different `#room` on the same page is a hash change and does not refill *Room code*: fill it.
 
 **Folder picker.** `showDirectoryPicker` can't be automated. `opfs-picker.js` replaces it with an OPFS subfolder `picked-<picker id>`: `picked-p2pstudio` is the recording root and `picked-p2pstudio-hq` is the leftover save target. To list everything in a peer's OPFS with sizes:
 
     playwright-cli -s=a eval "async () => { const o=[]; const w=async(d,p)=>{ for await (const [n,h] of d) h.kind==='directory' ? await w(h,p+n+'/') : o.push(p+n+' '+(await h.getFile()).size) }; await w(await navigator.storage.getDirectory(),''); return o }"
+
+The shim returns the same folder for the same id, so *Open a recording in the editor…* gets the recording root (no `events.jsonl`). To open a session (ED-*, LEFT-4, ROLL-2), or to pick another root (REC-5), override `window.showDirectoryPicker` in the page to return that folder before clicking. For FAIL-3, delete `root` from IndexedDB `p2pstudio`/`kv`, reload, and make it throw an `AbortError`.
 
 To read a file, e.g. `events.jsonl` of the first session:
 
@@ -147,12 +149,19 @@ The playback checks (ROLL-2, ED-3) need a human, or a screenshot of the editor c
       playwright-cli -s=a run-code "async page => { await page.route('**/js/recording.js', async r => { const res = await r.fetch(); await r.fulfill({response: res, body: (await res.text()).replace('5 * 60e3', '15e3')}) }); await page.reload() }"
 
 - Write failure: the `w.write(data)` call inside `fileWriter` (currently in `js/util.js`). Replace it with `(bytes > 1e6 ? Promise.reject(new Error("injected")) : w.write(data))`. Gate on `name` to fail only one file (REC-3).
+- Slow full-quality send (LEAVE-3, HQ-4): in `js/recording.js` replace `sent += buf.byteLength` with `await sleep(1500); sent += buf.byteLength` on the sender.
 
-A reload during a call may raise a `beforeunload` dialog (FAIL-4 behaviour). Answer it with `dialog-accept`. Routes persist across reloads in that session. Clear them with `page.unrouteAll()` in `run-code`.
+A reload during a call may raise a `beforeunload` dialog (FAIL-4 behaviour). Answer it with `dialog-accept`. Routes persist across reloads in that session. Clear them with `page.unrouteAll()` in `run-code`. A reload after that can still run the patched module from cache: check, or use a fresh session.
+
+**Toasts over controls.** Toasts can cover *Record*/*Stop recording*/*Leave*, and a Playwright click then fails with "intercepts pointer events". Click with `eval "() => document.querySelector('#leaveBtn').click()"` (or `#recBtn`) and report it.
+
+**Network log.** `playwright-cli network` came back empty. For LOB-5, read `performance.getEntriesByType('resource')`.
 
 **Network.** Peers find each other through trystero's public relays (loaded from esm.sh), so the internet is required. If the two sessions don't see each other within about 60 s, mark the peer-dependent tests BLOCKED with the reason. Do not simulate peers.
 
-**Crash (ROLL-3).** Kill the browser process (`playwright-cli kill-all`) rather than `close`. OPFS lives in an in-memory profile, so for ROLL-3 open with `--persistent` (or `--profile=<dir>`) to inspect files after the restart.
+**Crash (ROLL-3).** OPFS lives in an in-memory profile, so open with `--profile=<dir>`. `playwright-cli kill-all` kills only the daemon and leaves the browser running (and recording). Kill the browser itself (`pkill -9 -f <dir>`), delete `<dir>/Singleton*`, then reopen with the same `--profile` to inspect files.
+
+**Playback (ROLL-2, ED-3).** In `eval`, `(await import('/js/editor.js'))` exposes `edSeek`, `edPlay`, `edPause` and `ed.t`: play across a boundary and sample `#edCanvas` with `getImageData` each animation frame to find dark frames.
 
 ## Reporting
 
