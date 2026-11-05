@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>P2P Studio</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="css/style.css">
+<script type="module" src="js/main.js"></script>
+</head>
+<body>
+<header>
+  <h1>P2P Studio</h1>
+  <span id="hdrRoom" class="dim"></span>
+  <span class="sp"></span>
+  <span id="recBadge" class="badge rec hidden"></span>
+  <span id="hqBadge" class="badge hidden" style="background:#24452f;color:#9fe6b8"></span>
+</header>
+<main>
+<!-- ============ LOBBY ============ -->
+<section id="lobby">
+  <div id="lobbyPreview" class="card">
+    <video id="lobbyVideo" autoplay muted playsinline></video>
+    <div class="row"><span class="dim" style="width:34px">Mic</span><div class="meter" style="flex:1"><i id="lobbyMeter"></i></div></div>
+    <div id="leftoverHQ" class="hidden"></div>
+  </div>
+  <div id="lobbyForm" class="card">
+    <div class="field"><span>Your name</span><input id="name" placeholder="e.g. Greg"></div>
+    <div class="field"><span>Room code</span>
+      <div class="row" style="margin:0"><input id="room" style="flex:1" placeholder="purple-otter-42"><button id="randBtn" title="Random code">🎲</button></div></div>
+    <div id="settingsHost"><div id="settings">
+      <div class="field" id="camField"><span>Camera</span><select id="camSel"></select></div>
+      <div class="field" id="micField"><span>Microphone</span><select id="micSel"></select></div>
+      <div class="field"><span>Background</span><select id="blurSel"><option value="0">No blur</option><option value="1">Slight blur</option><option value="2">Strong blur</option></select></div>
+      <div class="field"><span>When someone records me, keep a full-quality local copy and…</span>
+        <select id="hqSel"><option value="ask">Ask before sending it to them</option><option value="always">Always send it automatically</option><option value="never">Don't keep a local copy</option></select></div>
+    </div></div>
+    <div class="row" style="margin-top:14px"><button id="joinBtn" class="primary" style="flex:1">Join room</button></div>
+    <hr>
+    <div class="row"><button id="openEdBtn" style="flex:1">Open a recording in the editor…</button></div>
+    <small>Chrome only. Open this page in another tab or device with the same room code to connect.</small>
+  </div>
+</section>
+
+<!-- ============ CALL ============ -->
+<section id="call" class="hidden">
+  <div id="stageWrap">
+    <div id="stage"></div>
+    <div id="controls">
+      <button id="micBtn" title="Mute (M)">🎙 Mic</button>
+      <button id="camBtn" title="Camera (V)">📷 Camera</button>
+      <button id="scrBtn">🖥 Share screen</button>
+      <button id="recBtn">⏺ Record</button>
+      <button id="markBtn" class="hidden" title="Add marker (K)">🚩 Marker</button>
+      <button id="inviteBtn">🔗 Copy invite</button>
+      <button id="leaveBtn" class="danger">Leave</button>
+    </div>
+  </div>
+  <aside id="side">
+    <div class="tabs"><button data-tab="chat" class="on">Chat</button><button data-tab="prod">Producer</button><button data-tab="set">Settings</button></div>
+    <div class="pane" data-pane="chat">
+      <div id="chatLog"></div>
+      <div class="row" style="margin:6px 0 0"><input id="chatIn" style="flex:1" placeholder="Message"><button id="chatSend">Send</button></div>
+    </div>
+    <div class="pane hidden" data-pane="prod">
+      <canvas id="progPreview" width="1920" height="1080"></canvas>
+      <div class="row"><span id="recInfo" class="dim">Not recording</span><span class="sp" style="flex:1"></span><button id="cleanBtn" title="Full-window clean output for OBS window capture">Clean output</button></div>
+      <div class="row"><button id="folderBtn">📁 Recording folder…</button><span id="folderName" class="dim"></span></div>
+      <hr>
+      <b>Layout</b>
+      <div id="liveLayout"></div>
+      <small>Everything that affects the final picture (layout, who's present, camera/mic state, markers) is logged to <code>events.jsonl</code> while recording.</small>
+    </div>
+    <div class="pane hidden" data-pane="set" id="setPane"></div>
+  </aside>
+</section>
+
+<!-- ============ EDITOR ============ -->
+<section id="editor" class="hidden">
+  <div id="edMain">
+    <div class="row" style="margin:0"><button id="edBack">← Lobby</button><b id="edTitle"></b><span class="dim" id="edInfo"></span></div>
+    <canvas id="edCanvas" width="1920" height="1080"></canvas>
+    <div class="row" style="margin:0">
+      <button id="edPlay" title="Space">▶</button>
+      <button id="edBack5" title="←">−5s</button><button id="edFwd5" title="→">+5s</button>
+      <span id="edTime" style="font-variant-numeric:tabular-nums"></span>
+      <span style="flex:1"></span>
+      <button id="edIn" title="I">Mark in</button><button id="edOut" title="O">Mark out → cut</button>
+      <button id="edTrimStart">Trim start to here</button><button id="edTrimEnd">Trim end from here</button>
+    </div>
+    <div id="tl"><div class="ruler" id="tlRuler"></div><div id="tlTracks"></div><div id="tlOver"></div></div>
+    <small><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> ±5s (<kbd>Shift</kbd> ±1s) · <kbd>I</kbd>/<kbd>O</kbd> mark in/out · green = full-quality source, blue = live-received, red = cut, ◆ layout change, yellow = marker</small>
+  </div>
+  <aside id="edSide">
+    <b>Layout at playhead</b>
+    <div id="edLayout"></div>
+    <div class="row"><button id="edApplyAll">Apply to whole session</button></div>
+    <small>Changing the layout adds a layout change at the playhead. It applies until the next change.</small>
+    <ul class="list" id="edKfs"></ul>
+    <hr><b>Cuts</b><ul class="list" id="edCuts"></ul>
+    <hr><b>Markers</b><ul class="list" id="edMarks"></ul>
+    <hr><b>Output</b>
+    <div class="row"><label><input type="checkbox" id="edPreferHQ" checked> Prefer full-quality sources</label></div>
+    <div class="row"><label><input type="checkbox" id="edMonitor"> Monitor audio while generating</label></div>
+    <div class="row"><button id="edGen" class="primary" style="flex:1">Generate final video</button></div>
+    <div id="edGenInfo" class="hidden"><progress id="edProg" max="1" value="0"></progress>
+      <div class="row"><span id="edGenTxt" class="dim" style="flex:1"></span><button id="edCancel">Cancel</button></div>
+      <small>Rendering runs in real time. Keep this tab visible.</small></div>
+  </aside>
+</section>
+</main>
+<div id="clean" class="hidden"></div>
+<div class="toasts" id="toasts"></div>
+</body></html>
