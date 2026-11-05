@@ -84,26 +84,40 @@ async function setBlur(n) {
   if (settings.blur) loadSegmenter().catch(() => {})
 }
 
+// each open/stop bumps req; a getUserMedia result that arrives after a newer request is stopped
+const req = {cam: 0, mic: 0}
+function stale(kind, n, stream) {
+  if (n === req[kind]) return false
+  stream.getTracks().forEach(t => t.stop())
+  return true
+}
 async function openCam(id) {
+  const n = ++req.cam
   cam.raw?.getTracks().forEach(t => t.stop()); cam.raw = null
   try {
-    cam.raw = await navigator.mediaDevices.getUserMedia({video: {deviceId: id ? {exact: id} : undefined, width: {ideal: 1280}, height: {ideal: 720}, frameRate: {ideal: 30}}})
+    const raw = await navigator.mediaDevices.getUserMedia({video: {deviceId: id ? {exact: id} : undefined, width: {ideal: 1280}, height: {ideal: 720}, frameRate: {ideal: 30}}})
+    if (stale('cam', n, raw)) return
+    cam.raw = raw
     cam.src.srcObject = cam.raw; await cam.src.play().catch(() => {})
     settings.camId = cam.raw.getVideoTracks()[0].getSettings().deviceId || id || ''
     LS.set('camId', settings.camId)
-  } catch (e) { if (id) return openCam(''); toast('Camera unavailable: ' + e.name, 6000) }
+  } catch (e) { if (n !== req.cam) return; if (id) return openCam(''); toast('Camera unavailable: ' + e.name, 6000) }
 }
 async function openMic(id) {
+  const n = ++req.mic
   mic.raw?.getTracks().forEach(t => t.stop()); mic.node?.disconnect(); mic.raw = null
   try {
-    mic.raw = await navigator.mediaDevices.getUserMedia({audio: {deviceId: id ? {exact: id} : undefined, echoCancellation: true, noiseSuppression: true, autoGainControl: true}})
+    const raw = await navigator.mediaDevices.getUserMedia({audio: {deviceId: id ? {exact: id} : undefined, echoCancellation: true, noiseSuppression: true, autoGainControl: true}})
+    if (stale('mic', n, raw)) return
+    mic.raw = raw
     mic.node = ac.createMediaStreamSource(mic.raw)
     mic.node.connect(mic.an); mic.node.connect(mic.dest)
     settings.micId = mic.raw.getAudioTracks()[0].getSettings().deviceId || id || ''
     LS.set('micId', settings.micId)
-  } catch (e) { if (id) return openMic(''); toast('Microphone unavailable: ' + e.name, 6000) }
+  } catch (e) { if (n !== req.mic) return; if (id) return openMic(''); toast('Microphone unavailable: ' + e.name, 6000) }
 }
 function stopLocalDevices() {
+  req.cam++; req.mic++
   cam.raw?.getTracks().forEach(t => t.stop()); cam.raw = null
   mic.raw?.getTracks().forEach(t => t.stop()); mic.node?.disconnect(); mic.raw = null
 }
