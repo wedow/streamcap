@@ -12,13 +12,19 @@ async function pickRoot() {
   rootDir = await window.showDirectoryPicker({id: 'p2pstudio', mode: 'readwrite'})
   await idb.set('root', rootDir); $('#folderName').textContent = rootDir.name
 }
+let starting = false
 async function startRecording() {
-  if (session) return
+  if (session || starting) return
+  starting = true
+  try { await openSession() } finally { starting = false }
+}
+async function openSession() {
   try {
     if (!rootDir || !(await ensurePerm(rootDir).catch(() => false))) await pickRoot()
   } catch { return }
   const dir = await rootDir.getDirectoryHandle(`${stamp()} ${slug(roomCode)}`, {create: true})
-  const s = {recId: rid(), dir, log: new EventLog(dir), recs: new Map(), counters: {}, t0: Date.now(), offsets: {}, inFiles: new Map(), incoming: new Map()}
+  const pf = `program-live.${EXT}`, mixWriter = await fileWriter(dir, pf)
+  const s = {recId: rid(), dir, log: new EventLog(dir), recs: new Map(), counters: {}, t0: Date.now(), offsets: {}, incoming: new Map()}
   session = s; useProgram(s, true); sessions.set(s.recId, s); idb.set('lastSession', dir)
   s.log.add('session-start', {room: roomCode, recorder: {pid: PID, name: me.name}, mime: MIME, program: {w: PW, h: PH, fps: 30}})
   s.log.add('peer-join', {pid: PID, name: me.name, self: true})
@@ -29,8 +35,7 @@ async function startRecording() {
   }
   s.log.add('layout', {layout: liveLayout})
   for (const f of feeds.values()) startFeedRec(f)
-  const pf = `program-live.${EXT}`
-  s.mix = recordStream(programStream, await fileWriter(dir, pf), {vbr: 8e6})
+  s.mix = recordStream(programStream, mixWriter, {vbr: 8e6})
   s.mix.started.then(t => s.log.add('program-start', {file: pf, t}))
   A.rec.send({on: true, recId: s.recId, name: me.name})
   s.timer = setInterval(updateRecUI, 1000)
@@ -41,7 +46,7 @@ async function startFeedRec(f) {
   const s = session; if (!s || s.recs.has(f.key)) return
   const n = s.counters[f.key] = (s.counters[f.key] || 0) + 1
   const src = f.local ? 'local' : 'live'
-  const file = `${src}-${slug(pidName(f.pid))}-${f.kind}-${n}.${EXT}`
+  const file = `${src}-${slug(pidName(f.pid))}-${slug(f.pid)}-${f.kind}-${n}.${EXT}`
   const p = (async () => {
     const rec = recordStream(f.stream, await fileWriter(s.dir, file), {
       vbr: f.local ? (f.kind === 'screen' ? 6e6 : 8e6) : 5e6, mime: FEED_MIME,
@@ -55,9 +60,11 @@ async function startFeedRec(f) {
 async function stopFeedRec(s, key) {
   const p = s.recs.get(key); if (!p) return
   s.recs.delete(key)
-  const {rec, file} = await p
-  const t = await rec.stop()
-  s.log.add('feed-stop', {t, key, file, bytes: rec.writer.bytes})
+  try {
+    const {rec, file} = await p
+    const t = await rec.stop()
+    s.log.add('feed-stop', {t, key, file, bytes: rec.writer.bytes})
+  } catch (e) { console.error('feed recording failed', key, e) }
 }
 async function stopRecording() {
   const s = session; if (!s) return
@@ -164,29 +171,39 @@ function onRecMessage(d, {peerId}) {
   hqUpdate(); updateRecUI()
 }
 function onHQPlan(d, {peerId}) {
-  const s = sessions.get(d.recId); if (!s) return
-  const name = peers.get(peerId)?.name
-  if (d.deciding) { if (!s.incoming.has(peerId)) s.incoming.set(peerId, {name, bytes: 0, got: 0, done: false, deciding: true}) }
+  const s = sessions.get(d.recId), p = peers.get(peerId); if (!s || !p?.pid) return
+  if (d.deciding) { if (!s.incoming.has(peerId)) s.incoming.set(peerId, {name: p.name, bytes: 0, got: 0, done: false, deciding: true}) }
   else {
-    s.incoming.set(peerId, {name, bytes: d.bytes, got: 0, done: d.bytes === 0, declined: d.bytes === 0})
-    if (d.bytes) toast(`Receiving full-quality files from ${name} (${fmtMB(d.bytes)})`)
+    s.incoming.set(peerId, {name: p.name, pid: p.pid, bytes: d.bytes, got: 0, done: d.bytes === 0, declined: d.bytes === 0, files: new Map()})
+    if (d.bytes) toast(`Receiving full-quality files from ${p.name} (${fmtMB(d.bytes)})`)
   }
   updateIncomingUI()
 }
 
 // ======================= receiving full-quality files (recorder side) =======================
+// only from peers that announced a transfer, up to the announced size, into files we name
 async function onHQChunk(data, {peerId, metadata: m}) {
-  const s = sessions.get(m?.recId); if (!s) return {ok: false, err: 'unknown session'}
-  let f = s.inFiles.get(m.fileId)
-  if (!f) { f = {w: await fileWriter(s.dir, m.info.file), info: m.info, pid: m.pid}; s.inFiles.set(m.fileId, f) }
-  await f.w.write(new Blob([data]))
-  const inc = s.incoming.get(peerId); if (inc) { inc.got += data.byteLength ?? data.size; updateIncomingUI() }
+  const s = sessions.get(m?.recId), inc = s?.incoming.get(peerId)
+  if (!inc?.files || inc.done) return {ok: false, err: 'no transfer announced'}
+  const n = data.byteLength ?? data.size
+  if (inc.got + n > inc.bytes) return {ok: false, err: 'more data than announced'}
+  const kind = m.info?.kind === 'screen' ? 'screen' : 'cam'
+  let f = inc.files.get(m.fileId)
+  if (!f) {
+    const file = `hq-${slug(inc.name)}-${slug(inc.pid)}-${kind}-${rid()}.${EXT}`
+    f = {file, seq: 0, w: fileWriter(s.dir, file)}; inc.files.set(m.fileId, f)
+  }
+  if (m.seq !== f.seq) return m.seq < f.seq ? {ok: true} : {ok: false, err: 'out of order'} // a retried chunk we already have
+  f.seq++; inc.got += n
+  const w = await f.w
+  await w.write(new Blob([data]))
+  updateIncomingUI()
   if (m.last) {
-    await f.w.close()
-    const off = s.offsets[m.pid] || 0
-    s.log.add('hq-file', {key: m.info.key, pid: m.pid, name: m.info.name, kind: m.info.kind, file: m.info.file, start: Math.round(m.info.start - off), end: Math.round(m.info.end - off), source: 'hq'})
+    await w.close()
+    const off = s.offsets[inc.pid] || 0
+    s.log.add('hq-file', {key: `${inc.pid}:${kind}`, pid: inc.pid, name: inc.name, kind, file: f.file, start: Math.round(m.info.start - off), end: Math.round(m.info.end - off), source: 'hq'})
     await s.log.flush()
-    if (m.final && inc) { inc.done = true; updateIncomingUI(); toast(`✅ Received full-quality files from ${inc.name}`) }
+    if (m.final) { inc.done = true; updateIncomingUI(); toast(`✅ Received full-quality files from ${inc.name}`) }
   }
   return {ok: true}
 }
@@ -223,7 +240,8 @@ async function hqUpdate() {
 }
 function hqStartSeg(f) {
   if (!hq.active || hq.cur.has(f.key)) return
-  const seg = {id: rid(), key: f.key, pid: PID, kind: f.kind, name: me.name, file: `hq-${slug(me.name)}-${f.kind}-${PID}-${hq.segs.length + 1}.${EXT}`, start: null, end: null, sentTo: new Set()}
+  const id = rid()
+  const seg = {id, key: f.key, pid: PID, kind: f.kind, name: me.name, file: `hq-${slug(me.name)}-${PID}-${f.kind}-${id}.${EXT}`, start: null, end: null, sentTo: new Set()}
   hq.segs.push(seg)
   const p = (async () => {
     const w = await fileWriter(await hqDir(), seg.file)
@@ -234,43 +252,52 @@ function hqStartSeg(f) {
 }
 async function hqStopSeg(key) {
   const c = hq.cur.get(key); if (!c) return
-  hq.cur.delete(key); await c.p
-  c.seg.end = await c.seg.rec.stop(); c.seg.size = c.seg.rec.writer.bytes
+  hq.cur.delete(key)
+  try {
+    await c.p
+    c.seg.end = await c.seg.rec.stop(); c.seg.size = c.seg.rec.writer.bytes
+  } catch (e) { console.error('full-quality recording failed', key, e) }
   await hqSaveManifest()
 }
 function hqPendingFor(recId) {
   const r = hq.recs.get(recId); if (!r) return []
   return hq.segs.filter(s => s.end && !s.sentTo.has(recId) && s.end > r.start && s.start < (r.stop || Infinity))
 }
-const offering = new Set()
-async function offerHQ(recId) {
+const offering = new Map() // recId -> pending offer, so callers can wait for one already running
+function offerHQ(recId) {
+  if (!offering.has(recId)) offering.set(recId, offerHQOnce(recId).finally(() => offering.delete(recId)))
+  return offering.get(recId)
+}
+async function offerHQOnce(recId) {
   const r = hq.recs.get(recId)
-  if (!r || r.gone || settings.hq === 'never' || offering.has(recId)) return
+  if (!r || r.gone || settings.hq === 'never') return
   const segs = hqPendingFor(recId); if (!segs.length) return
-  offering.add(recId)
   A.hqPlan.send({recId, deciding: true}, {target: r.peerId})
   const bytes = segs.reduce((a, s) => a + (s.size || 0), 0)
   let ok = settings.hq === 'always'
   if (!ok) ok = await modal('Send full-quality recording?', `${r.name} stopped recording. Send them your full-quality local copy (${segs.length} file${segs.length > 1 ? 's' : ''}, ${fmtMB(bytes)}) so their final video uses it instead of what came over the call?`, [['Not now', false], ['Send', true, 'primary']])
-  if (!ok) { A.hqPlan.send({recId, bytes: 0}, {target: r.peerId}); offering.delete(recId); return }
-  await sendHQ(recId, segs, bytes)
-  offering.delete(recId)
+  if (!ok) return A.hqPlan.send({recId, bytes: 0}, {target: r.peerId})
+  await sendHQ(recId, segs)
 }
-async function sendHQ(recId, segs, bytes) {
+async function sendHQ(recId, segs) {
   const r = hq.recs.get(recId)
-  A.hqPlan.send({recId, bytes}, {target: r.peerId})
-  const bar = h('progress', {max: bytes || 1, value: 0, style: 'width:180px'})
+  const bar = h('progress', {value: 0, style: 'width:180px'})
   const t = toast(`Sending full-quality files to ${r.name}…`, 0, bar)
   let sent = 0
   try {
+    const dir = await hqDir()
+    const files = await Promise.all(segs.map(async s => (await dir.getFileHandle(s.file)).getFile()))
+    const bytes = files.reduce((a, f) => a + f.size, 0) // the receiver accepts no more than this
+    bar.max = bytes || 1
+    A.hqPlan.send({recId, bytes}, {target: r.peerId})
     for (let i = 0; i < segs.length; i++) {
       const seg = segs[i]
-      const file = await (await (await hqDir()).getFileHandle(seg.file)).getFile()
+      const file = files[i]
       const fileId = rid(), total = Math.max(1, Math.ceil(file.size / CHUNK))
       for (let c = 0; c < total; c++) {
         const buf = await file.slice(c * CHUNK, (c + 1) * CHUNK).arrayBuffer()
         const last = c === total - 1
-        const md = {recId, fileId, pid: PID, seq: c, last, final: last && i === segs.length - 1, info: {key: seg.key, kind: seg.kind, name: seg.name, file: seg.file, start: seg.start, end: seg.end}}
+        const md = {recId, fileId, seq: c, last, final: last && i === segs.length - 1, info: {kind: seg.kind, start: seg.start, end: seg.end}}
         let tries = 0
         while (true) {
           try { const res = await A.hq.request(buf, {target: r.peerId, metadata: md, timeoutMs: 60000}); if (res?.ok) break; throw new Error(res?.err || 'rejected') }
