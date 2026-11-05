@@ -50,16 +50,25 @@ async function startFeedRec(f) {
   const p = (async () => {
     const rec = recordStream(f.stream, await fileWriter(s.dir, file), {
       vbr: f.local ? (f.kind === 'screen' ? 6e6 : 8e6) : 5e6, mime: FEED_MIME,
-      onerror: () => { if (session === s && feeds.get(f.key) === f) stopFeedRec(s, f.key).then(() => startFeedRec(f)) }
+      onerror: () => { if (session === s && feeds.get(f.key) === f) rollFeedRec(s, f) }
     })
     rec.started.then(t => s.log.add('feed-start', {t, key: f.key, pid: f.pid, name: pidName(f.pid), kind: f.kind, file, source: src}))
     return {rec, file}
   })()
   s.recs.set(f.key, p)
 }
-async function stopFeedRec(s, key) {
-  const p = s.recs.get(key); if (!p) return
-  s.recs.delete(key)
+function stopFeedRec(s, key) {
+  const p = s.recs.get(key); s.recs.delete(key)
+  return endFeedRec(s, key, p)
+}
+// continue in a new file (the old one is finished after the new one started, so nothing is missed)
+function rollFeedRec(s, f) {
+  const p = s.recs.get(f.key); s.recs.delete(f.key)
+  startFeedRec(f)
+  return endFeedRec(s, f.key, p)
+}
+async function endFeedRec(s, key, p) {
+  if (!p) return
   try {
     const {rec, file} = await p
     const t = await rec.stop()
@@ -250,15 +259,32 @@ function hqStartSeg(f) {
   })()
   hq.cur.set(f.key, {seg, p})
 }
-async function hqStopSeg(key) {
-  const c = hq.cur.get(key); if (!c) return
-  hq.cur.delete(key)
+function hqStopSeg(key) {
+  const c = hq.cur.get(key); hq.cur.delete(key)
+  return hqEndSeg(c)
+}
+function hqRollSeg(f) {
+  const c = hq.cur.get(f.key); hq.cur.delete(f.key)
+  hqStartSeg(f)
+  return hqEndSeg(c)
+}
+async function hqEndSeg(c) {
+  if (!c) return
   try {
     await c.p
     c.seg.end = await c.seg.rec.stop(); c.seg.size = c.seg.rec.writer.bytes
-  } catch (e) { console.error('full-quality recording failed', key, e) }
+  } catch (e) { console.error('full-quality recording failed', c.seg.key, e) }
   await hqSaveManifest()
 }
+// Chrome only commits a writable file on close(), so a crash loses whatever is still open.
+// Rolling every few minutes bounds that loss; the editor already plays consecutive files per feed.
+setInterval(() => {
+  const s = session
+  for (const f of feeds.values()) {
+    if (s?.recs.has(f.key)) rollFeedRec(s, f)
+    if (hq.cur.has(f.key)) hqRollSeg(f)
+  }
+}, 5 * 60e3)
 function hqPendingFor(recId) {
   const r = hq.recs.get(recId); if (!r) return []
   return hq.segs.filter(s => s.end && !s.sentTo.has(recId) && s.end > r.start && s.start < (r.stop || Infinity))
