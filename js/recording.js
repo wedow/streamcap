@@ -1,11 +1,13 @@
 import {MIME, EXT, FEED_MIME, PW, PH, CHUNK} from './config.js'
 import {$, h, fmt, fmtMB, slug, stamp, rid, sleep, PID, idb, ensurePerm, toast, modal, fileWriter, recordStream, EventLog} from './util.js'
-import {settings, me, localStream, stopLocalDevices} from './media.js'
-import {room, A, roomCode, peers, feeds, liveLayout, pidName, remoteRecorders, prog, toggleMic, toggleCam, stopScreen} from './call.js'
+import {settings, me} from './media.js'
+import {roomCode, peers, feeds, liveLayout, pidName, prog} from './call.js'
 
 let session = null
 const sessions = new Map() // recId -> session (kept after stop to receive HQ files)
 let rootDir = null
+const remoteRecorders = new Map() // recId -> {peerId, name}
+const A = {} // room actions owned by recording, made on join
 idb.get('root').then(d => { rootDir = d; $('#folderName').textContent = d ? d.name : '' })
 async function pickRoot() {
   rootDir = await window.showDirectoryPicker({id: 'p2pstudio', mode: 'readwrite'})
@@ -18,12 +20,12 @@ async function startRecording() {
   } catch { return }
   const dir = await rootDir.getDirectoryHandle(`${stamp()} ${slug(roomCode)}`, {create: true})
   const s = {recId: rid(), dir, log: new EventLog(dir), recs: new Map(), counters: {}, t0: Date.now(), offsets: {}, inFiles: new Map(), incoming: new Map()}
-  session = s; sessions.set(s.recId, s); idb.set('lastSession', dir)
+  session = s; prog.recording = true; sessions.set(s.recId, s); idb.set('lastSession', dir)
   s.log.add('session-start', {room: roomCode, recorder: {pid: PID, name: me.name}, mime: MIME, program: {w: PW, h: PH, fps: 30}})
   s.log.add('peer-join', {pid: PID, name: me.name, self: true})
-  s.log.add('state', {pid: PID, name: me.name, mic: me.mic, cam: me.cam})
+  logState(PID, me)
   for (const [peerId, p] of peers) if (p.helloed) {
-    s.log.add('peer-join', {pid: p.pid, name: p.name}); s.log.add('state', {pid: p.pid, name: p.name, mic: p.mic, cam: p.cam})
+    s.log.add('peer-join', {pid: p.pid, name: p.name}); logState(p.pid, p)
     clockSync(s, peerId)
   }
   s.log.add('layout', {layout: liveLayout})
@@ -60,7 +62,7 @@ async function stopFeedRec(s, key) {
 }
 async function stopRecording() {
   const s = session; if (!s) return
-  session = null
+  session = null; prog.recording = false
   A.rec.send({on: false, recId: s.recId, name: me.name})
   clearInterval(s.timer)
   await Promise.all([...s.recs.keys()].map(k => stopFeedRec(s, k)))
@@ -100,6 +102,78 @@ function updateRecUI() {
   const hqOn = hq.active
   $('#hqBadge').classList.toggle('hidden', !hqOn)
   $('#hqBadge').textContent = hqOn ? '● Full-quality local copy' : ''
+}
+
+function addMarker() {
+  const label = 'Marker ' + new Date().toLocaleTimeString()
+  if (session) { session.log.add('marker', {label, by: me.name}); toast('🚩 Marker added') }
+  for (const [, r] of remoteRecorders) A.marker.send({label}, {target: r.peerId})
+  if (remoteRecorders.size && !session) toast('🚩 Marker sent to recorder')
+}
+
+// ======================= call hooks (see joinCall) =======================
+const logState = (pid, {name, mic, cam}) => session?.log.add('state', {pid, name, mic, cam})
+const callHooks = {
+  joined(room) {
+    A.rec = room.makeAction('rec')
+    A.marker = room.makeAction('marker')
+    A.hqPlan = room.makeAction('hqPlan')
+    A.clock = room.makeAction('clock', {kind: 'request', onRequest: () => Date.now()})
+    A.hq = room.makeAction('hq', {kind: 'request', onRequest: onHQChunk})
+    A.marker.onMessage = (d, {peerId}) => { if (session) { session.log.add('marker', {label: d.label, by: peers.get(peerId)?.name}); toast(`🚩 Marker from ${peers.get(peerId)?.name}`) } }
+    A.rec.onMessage = onRecMessage
+    A.hqPlan.onMessage = onHQPlan
+  },
+  peerJoined(peerId) {
+    if (session) A.rec.send({on: true, recId: session.recId, name: me.name}, {target: peerId})
+  },
+  peerHello(peerId, d, first, changed) {
+    if (!session) return
+    if (first) { session.log.add('peer-join', {pid: d.pid, name: d.name}); clockSync(session, peerId) }
+    if (first || changed) logState(d.pid, d)
+  },
+  peerLeft(peerId, p) {
+    if (p?.helloed) session?.log.add('peer-leave', {pid: p.pid, name: p.name})
+    for (const [id, r] of [...remoteRecorders]) if (r.peerId === peerId) {
+      remoteRecorders.delete(id)
+      const x = hq.recs.get(id); if (x) { x.live = false; x.stop = Date.now(); x.gone = true }
+    }
+    for (const s of sessions.values()) { const inc = s.incoming.get(peerId); if (inc && !inc.done) { inc.failed = true; updateIncomingUI() } }
+    hqUpdate(); updateRecUI()
+  },
+  feedAdded(f) {
+    if (session) startFeedRec(f)
+    if (f.local) hqStartSeg(f)
+  },
+  feedRemoved(f) {
+    if (session) stopFeedRec(session, f.key)
+    if (f.local) hqStopSeg(f.key)
+  },
+  stateChanged: () => logState(PID, me),
+  layoutChanged: layout => session?.log.add('layout', {layout})
+}
+function onRecMessage(d, {peerId}) {
+  if (d.on) {
+    remoteRecorders.set(d.recId, {peerId, name: d.name})
+    hq.recs.set(d.recId, {peerId, name: d.name, start: Date.now(), live: true})
+    toast(`⏺ ${d.name} started recording`)
+  } else {
+    remoteRecorders.delete(d.recId)
+    const r = hq.recs.get(d.recId); if (r) { r.live = false; r.stop = Date.now() }
+    toast(`${d.name} stopped recording`)
+    hqUpdate().then(() => offerHQ(d.recId))
+  }
+  hqUpdate(); updateRecUI()
+}
+function onHQPlan(d, {peerId}) {
+  const s = sessions.get(d.recId); if (!s) return
+  const name = peers.get(peerId)?.name
+  if (d.deciding) { if (!s.incoming.has(peerId)) s.incoming.set(peerId, {name, bytes: 0, got: 0, done: false, deciding: true}) }
+  else {
+    s.incoming.set(peerId, {name, bytes: d.bytes, got: 0, done: d.bytes === 0, declined: d.bytes === 0})
+    if (d.bytes) toast(`Receiving full-quality files from ${name} (${fmtMB(d.bytes)})`)
+  }
+  updateIncomingUI()
 }
 
 // ======================= receiving full-quality files (recorder side) =======================
@@ -237,15 +311,16 @@ async function clearHQ(segs) {
 }
 
 // ======================= leaving =======================
-async function leaveCall() {
-  if (session) {
-    if (!await modal('Stop recording and leave?', 'Your recording will be finalized first.', [['Cancel', false], ['Stop & leave', true, 'danger']])) return
-    await stopRecording()
-  }
-  // stop sending media right away, but keep the room connection for transfers
-  stopScreen()
-  try { room.removeStream(localStream) } catch {}
-  toggleCam(false); toggleMic(false); stopLocalDevices()
+// false if the user cancelled
+async function stopRecordingForLeave() {
+  if (!session) return true
+  if (!await modal('Stop recording and leave?', 'Your recording will be finalized first.', [['Cancel', false], ['Stop & leave', true, 'danger']])) return false
+  await stopRecording()
+  return true
+}
+const pendingIncoming = () => [...sessions.values()].some(s => [...s.incoming.values()].some(i => !i.done && !i.failed))
+// offer/send full-quality copies, then wait for incoming transfers
+async function finishTransfers() {
   for (const r of hq.recs.values()) if (r.live) { r.live = false; r.stop = Date.now() }
   await hqUpdate()
   // participant: send full-quality copies
@@ -262,21 +337,16 @@ async function leaveCall() {
   const sent = hq.segs.filter(s => s.end && s.sentTo.size); if (sent.length) await clearHQ(sent)
   // recorder: wait for incoming transfers
   if (sessions.size) await sleep(1500) // give participants a moment to announce transfers
-  const pendingIncoming = () => [...sessions.values()].some(s => [...s.incoming.values()].some(i => !i.done && !i.failed))
   if (pendingIncoming()) {
     const p = modal('Receiving full-quality files…', incomingBody(), [['Leave anyway', 'leave', 'danger']])
     modal.current.dataset.kind = 'incoming'
     const iv = setInterval(() => { if (!pendingIncoming()) modal.current?.close('done') }, 500)
     await p; clearInterval(iv)
   }
-  room.leave()
-  for (const s of sessions.values()) await s.log.flush()
-  location.hash = roomCode; location.reload()
 }
+const flushLogs = () => Promise.all([...sessions.values()].map(s => s.log.flush()))
 addEventListener('beforeunload', e => {
-  if (session || offering.size || [...sessions.values()].some(s => [...s.incoming.values()].some(i => !i.done && !i.failed))) { e.preventDefault(); e.returnValue = '' }
+  if (session || offering.size || pendingIncoming()) { e.preventDefault(); e.returnValue = '' }
 })
 
-// ======================= editor =======================
-
-export {session, sessions, rootDir, pickRoot, startRecording, startFeedRec, stopFeedRec, stopRecording, clockSync, updateRecUI, onHQChunk, updateIncomingUI, incomingBody, hq, hqDir, hqWanted, hqSaveManifest, hqUpdate, hqStartSeg, hqStopSeg, hqPendingFor, offering, offerHQ, sendHQ, saveHQToFolder, clearHQ, leaveCall}
+export {session, pickRoot, startRecording, stopRecording, addMarker, callHooks, hq, hqDir, hqUpdate, saveHQToFolder, clearHQ, stopRecordingForLeave, finishTransfers, flushLogs}

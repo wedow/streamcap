@@ -1,8 +1,8 @@
 import {qs, PW, PH} from './config.js'
 import {$, h, mkCanvas, LS, idb, toast} from './util.js'
-import {settings, me, cam, loadSegmenter, openCam, openMic, refreshDevices} from './media.js'
-import {room, A, roomCode, prog, joinCall, chatLine, toggleMic, toggleCam, toggleScreen, addMarker} from './call.js'
-import {session, pickRoot, startRecording, stopRecording, hq, hqDir, hqUpdate, saveHQToFolder, clearHQ, leaveCall} from './recording.js'
+import {settings, me, cam, loadSegmenter, setBlur, openCam, openMic, refreshDevices} from './media.js'
+import {room, A, roomCode, prog, joinCall, chatLine, toggleMic, toggleCam, toggleScreen, stopSending} from './call.js'
+import {session, pickRoot, startRecording, stopRecording, addMarker, callHooks, hq, hqDir, hqUpdate, saveHQToFolder, clearHQ, stopRecordingForLeave, finishTransfers, flushLogs} from './recording.js'
 import {ed, openEditor, edPlay, edPause, edSeek} from './editor.js'
 
 $('#name').value = me.name
@@ -13,8 +13,13 @@ $('#randBtn').onclick = () => {
   const r = () => w[Math.floor(Math.random() * w.length)]
   $('#room').value = `${r()}-${r()}-${Math.floor(Math.random() * 100)}`
 }
-$('#joinBtn').onclick = joinCall
-$('#room').onkeydown = e => { if (e.key === 'Enter') joinCall() }
+const join = () => joinCall(callHooks)
+$('#joinBtn').onclick = join
+$('#room').onkeydown = e => { if (e.key === 'Enter') join() }
+$('#camSel').onchange = e => openCam(e.target.value)
+$('#micSel').onchange = e => openMic(e.target.value)
+$('#blurSel').onchange = e => setBlur(e.target.value)
+$('#hqSel').onchange = e => { settings.hq = e.target.value; LS.set('hqMode', settings.hq); hqUpdate() }
 $('#openEdBtn').onclick = () => openEditor()
 $('#micBtn').onclick = () => toggleMic()
 $('#camBtn').onclick = () => toggleCam()
@@ -54,6 +59,15 @@ addEventListener('keydown', e => {
   }
 })
 
+async function leaveCall() {
+  if (!await stopRecordingForLeave()) return
+  stopSending()
+  await finishTransfers()
+  room.leave()
+  await flushLogs()
+  location.hash = roomCode; location.reload()
+}
+
 async function checkLeftovers() {
   try {
     const d = await hqDir()
@@ -84,4 +98,3 @@ async function boot() {
   if (settings.blur) loadSegmenter().catch(() => {})
 }
 boot()
-$('#hqSel').onchange = e => { settings.hq = e.target.value; LS.set('hqMode', settings.hq); hqUpdate() }

@@ -119,9 +119,6 @@ async function refreshDevices() {
   fill($('#micSel'), $('#micField'), ds.filter(d => d.kind === 'audioinput' && d.deviceId !== 'communications'), settings.micId)
 }
 navigator.mediaDevices.addEventListener('devicechange', refreshDevices)
-$('#camSel').onchange = e => openCam(e.target.value)
-$('#micSel').onchange = e => openMic(e.target.value)
-$('#blurSel').onchange = e => setBlur(e.target.value)
 
 // mic level meter
 const meterBuf = new Uint8Array(512)
