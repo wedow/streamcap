@@ -18,7 +18,13 @@ function resolveMode(layout, items) {
 function computeRects(W, H, mode, items, layout) {
   const pad = Math.round(W * 0.0125), n = items.length, out = []
   if (!n) return out
-  const t16 = (x, y, w, hh) => { if (layout.fill) return [x, y, w, hh]; let tw = w, th = tw * 9 / 16; if (th > hh) { th = hh; tw = th * 16 / 9 } return [x + (w - tw) / 2, y + (hh - th) / 2, tw, th] }
+  // largest centered 16:9 box inside the cell (or the whole cell when filling)
+  const t16 = (x, y, w, hh) => {
+    if (layout.fill) return [x, y, w, hh]
+    let tw = w, th = tw * 9 / 16
+    if (th > hh) { th = hh; tw = th * 16 / 9 }
+    return [x + (w - tw) / 2, y + (hh - th) / 2, tw, th]
+  }
   if (mode === 'solo' || n === 1) out.push({it: items[0], r: [0, 0, W, H], full: true})
   else if (mode === 'side' || mode === 'grid') {
     const cols = mode === 'side' ? n : Math.ceil(Math.sqrt(n)), rows = Math.ceil(n / cols)
@@ -93,7 +99,12 @@ function layoutControls(host, get, set, keysFn) {
     lp.value = L.labelPos || 'bl'
     const pc = h('select', {onchange: e => set({...get(), pipCorner: e.target.value})}, [['br', 'bottom right'], ['bl', 'bottom left'], ['tr', 'top right'], ['tl', 'top left']].map(([v, l]) => h('option', {value: v}, l)))
     pc.value = L.pipCorner || 'br'
-    const move = (i, d) => { const ks = resolved.items.map(k => k.key); const j = i + d; if (j < 0 || j >= ks.length) return;[ks[i], ks[j]] = [ks[j], ks[i]]; set({...get(), order: ks, mode: get().mode === 'auto' && ks.length ? 'auto' : get().mode}) }
+    const move = (i, d) => {
+      const ks = resolved.items.map(k => k.key), j = i + d
+      if (j < 0 || j >= ks.length) return
+      ;[ks[i], ks[j]] = [ks[j], ks[i]]
+      set({...get(), order: ks})
+    }
     host.append(...[
       h('div', {class: 'row'}, sel, L.mode === 'auto' ? h('small', {}, '→ ' + (LAYOUT_MODES.find(m => m[0] === resolved.mode)?.[1] || '')) : null),
       L.mode === 'pip' ? h('div', {class: 'row'}, h('span', {class: 'dim'}, 'Inset corner'), pc) : null,

@@ -13,10 +13,17 @@ function h(tag, attrs = {}, ...kids) {
   return e
 }
 const mkCanvas = (w, hh) => Object.assign(document.createElement('canvas'), {width: w, height: hh})
-const fmt = ms => { ms = Math.max(0, ms | 0); const s = Math.floor(ms / 1000), hh = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, ss = s % 60; return (hh ? hh + ':' + String(m).padStart(2, '0') : m) + ':' + String(ss).padStart(2, '0') }
+const pad2 = n => String(n).padStart(2, '0')
+function fmt(ms) {
+  const s = Math.floor(Math.max(0, ms | 0) / 1000), hh = Math.floor(s / 3600), m = Math.floor(s / 60) % 60
+  return (hh ? hh + ':' + pad2(m) : m) + ':' + pad2(s % 60)
+}
 const fmtMB = b => (b / 1048576).toFixed(b > 1e8 ? 0 : 1) + ' MB'
 const slug = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'guest'
-const stamp = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}.${p(d.getMinutes())}.${p(d.getSeconds())}` }
+function stamp() {
+  const d = new Date()
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}.${pad2(d.getMinutes())}.${pad2(d.getSeconds())}`
+}
 const rid = () => crypto.randomUUID().slice(0, 8)
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 const initials = n => (n || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase()
@@ -24,7 +31,14 @@ const LS = {
   get(k, d) { try { const v = localStorage.getItem('p2ps.' + k); return v == null ? d : JSON.parse(v) } catch { return d } },
   set(k, v) { try { localStorage.setItem('p2ps.' + k, JSON.stringify(v)) } catch {} }
 }
-const PID = (() => { try { let p = sessionStorage.getItem('p2ps.pid'); if (!p) { p = rid(); sessionStorage.setItem('p2ps.pid', p) } return p } catch { return rid() } })()
+// participant id: stable across reloads of this tab
+const PID = (() => {
+  try {
+    let p = sessionStorage.getItem('p2ps.pid')
+    if (!p) { p = rid(); sessionStorage.setItem('p2ps.pid', p) }
+    return p
+  } catch { return rid() }
+})()
 const idb = (() => {
   let dbp
   const db = () => dbp ??= new Promise((res, rej) => { const r = indexedDB.open('p2pstudio', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error) })
@@ -62,7 +76,12 @@ const ticker = new Worker(URL.createObjectURL(new Blob([`
   fire()`])))
 const tickers = new Set()
 const stats = window.__studioStats = {frameMs: 0}
-ticker.onmessage = () => { const t = performance.now(); for (const f of tickers) { try { f() } catch (e) { console.error(e) } } stats.frameMs = stats.frameMs * 0.9 + (performance.now() - t) * 0.1; ticker.postMessage(0) }
+ticker.onmessage = () => {
+  const t = performance.now()
+  for (const f of tickers) { try { f() } catch (e) { console.error(e) } }
+  stats.frameMs = stats.frameMs * 0.9 + (performance.now() - t) * 0.1
+  ticker.postMessage(0)
+}
 
 // files
 async function fileWriter(dir, name) {
@@ -71,7 +90,11 @@ async function fileWriter(dir, name) {
   let chain = Promise.resolve(), bytes = 0
   return {
     name, fh, get bytes() { return bytes },
-    write(data) { const n = data.size ?? data.byteLength; chain = chain.then(() => w.write(data)).then(() => { bytes += n }).catch(e => console.error('write failed', name, e)); return chain },
+    write(data) {
+      const n = data.size ?? data.byteLength
+      chain = chain.then(() => w.write(data)).then(() => { bytes += n }).catch(e => console.error('write failed', name, e))
+      return chain
+    },
     async close() { await chain; await w.close() }
   }
 }

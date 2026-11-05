@@ -29,7 +29,11 @@ $('#markBtn').onclick = addMarker
 $('#leaveBtn').onclick = leaveCall
 $('#folderBtn').onclick = () => pickRoot().catch(() => {})
 $('#inviteBtn').onclick = () => { navigator.clipboard.writeText(location.origin + location.pathname + '#' + encodeURIComponent(roomCode)); toast('Invite link copied') }
-const sendChat = () => { const v = $('#chatIn').value.trim(); if (!v || !A.chat) return; A.chat.send(v); chatLine('You', v); $('#chatIn').value = '' }
+function sendChat() {
+  const v = $('#chatIn').value.trim()
+  if (!v || !A.chat) return
+  A.chat.send(v); chatLine('You', v); $('#chatIn').value = ''
+}
 $('#chatSend').onclick = sendChat
 $('#chatIn').onkeydown = e => { if (e.key === 'Enter') sendChat() }
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
