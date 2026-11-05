@@ -1,5 +1,5 @@
 const qs = new URLSearchParams(location.search)
-const TRYSTERO_URL = qs.get('trystero') || 'https://esm.sh/trystero@0.26.0'
+const TRYSTERO_URL = 'https://esm.sh/trystero@0.26.0'
 const MP_VER = '1.2.2'
 const MP_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/vision_bundle.mjs`
 const MP_WASM = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/wasm`
