@@ -1,12 +1,11 @@
 import {MIME, EXT, FEED_MIME, PW, PH, CHUNK} from './config.js'
 import {$, h, fmt, fmtMB, slug, stamp, rid, sleep, PID, idb, ensurePerm, toast, modal, fileWriter, recordStream, EventLog} from './util.js'
 import {settings, me} from './media.js'
-import {roomCode, peers, feeds, liveLayout, pidName, prog} from './call.js'
+import {roomCode, peers, feeds, liveLayout, pidName, programStream, useProgram} from './call.js'
 
 let session = null
 const sessions = new Map() // recId -> session (kept after stop to receive HQ files)
 let rootDir = null
-const remoteRecorders = new Map() // recId -> {peerId, name}
 const A = {} // room actions owned by recording, made on join
 idb.get('root').then(d => { rootDir = d; $('#folderName').textContent = d ? d.name : '' })
 async function pickRoot() {
@@ -20,7 +19,7 @@ async function startRecording() {
   } catch { return }
   const dir = await rootDir.getDirectoryHandle(`${stamp()} ${slug(roomCode)}`, {create: true})
   const s = {recId: rid(), dir, log: new EventLog(dir), recs: new Map(), counters: {}, t0: Date.now(), offsets: {}, inFiles: new Map(), incoming: new Map()}
-  session = s; prog.recording = true; sessions.set(s.recId, s); idb.set('lastSession', dir)
+  session = s; useProgram(s, true); sessions.set(s.recId, s); idb.set('lastSession', dir)
   s.log.add('session-start', {room: roomCode, recorder: {pid: PID, name: me.name}, mime: MIME, program: {w: PW, h: PH, fps: 30}})
   s.log.add('peer-join', {pid: PID, name: me.name, self: true})
   logState(PID, me)
@@ -31,7 +30,7 @@ async function startRecording() {
   s.log.add('layout', {layout: liveLayout})
   for (const f of feeds.values()) startFeedRec(f)
   const pf = `program-live.${EXT}`
-  s.mix = recordStream(prog.stream, await fileWriter(dir, pf), {vbr: 8e6})
+  s.mix = recordStream(programStream, await fileWriter(dir, pf), {vbr: 8e6})
   s.mix.started.then(t => s.log.add('program-start', {file: pf, t}))
   A.rec.send({on: true, recId: s.recId, name: me.name})
   s.timer = setInterval(updateRecUI, 1000)
@@ -62,7 +61,7 @@ async function stopFeedRec(s, key) {
 }
 async function stopRecording() {
   const s = session; if (!s) return
-  session = null; prog.recording = false
+  session = null; useProgram(s, false)
   A.rec.send({on: false, recId: s.recId, name: me.name})
   clearInterval(s.timer)
   await Promise.all([...s.recs.keys()].map(k => stopFeedRec(s, k)))
@@ -87,7 +86,7 @@ async function clockSync(s, peerId) {
   if (best && pid) { s.offsets[pid] = best.off; s.log.add('clock', {pid, offset: Math.round(best.off), rtt: best.rtt}) }
 }
 function updateRecUI() {
-  const others = [...remoteRecorders.values()].map(r => r.name)
+  const others = liveRecs().map(r => r.name)
   const parts = []
   if (session) parts.push('You')
   parts.push(...others)
@@ -107,8 +106,9 @@ function updateRecUI() {
 function addMarker() {
   const label = 'Marker ' + new Date().toLocaleTimeString()
   if (session) { session.log.add('marker', {label, by: me.name}); toast('🚩 Marker added') }
-  for (const [, r] of remoteRecorders) A.marker.send({label}, {target: r.peerId})
-  if (remoteRecorders.size && !session) toast('🚩 Marker sent to recorder')
+  const recs = liveRecs()
+  for (const r of recs) A.marker.send({label}, {target: r.peerId})
+  if (recs.length && !session) toast('🚩 Marker sent to recorder')
 }
 
 // ======================= call hooks (see joinCall) =======================
@@ -134,9 +134,9 @@ const callHooks = {
   },
   peerLeft(peerId, p) {
     if (p?.helloed) session?.log.add('peer-leave', {pid: p.pid, name: p.name})
-    for (const [id, r] of [...remoteRecorders]) if (r.peerId === peerId) {
-      remoteRecorders.delete(id)
-      const x = hq.recs.get(id); if (x) { x.live = false; x.stop = Date.now(); x.gone = true }
+    for (const r of hq.recs.values()) if (r.peerId === peerId) {
+      if (r.live) { r.live = false; r.stop = Date.now() }
+      r.gone = true
     }
     for (const s of sessions.values()) { const inc = s.incoming.get(peerId); if (inc && !inc.done) { inc.failed = true; updateIncomingUI() } }
     hqUpdate(); updateRecUI()
@@ -154,11 +154,9 @@ const callHooks = {
 }
 function onRecMessage(d, {peerId}) {
   if (d.on) {
-    remoteRecorders.set(d.recId, {peerId, name: d.name})
     hq.recs.set(d.recId, {peerId, name: d.name, start: Date.now(), live: true})
     toast(`⏺ ${d.name} started recording`)
   } else {
-    remoteRecorders.delete(d.recId)
     const r = hq.recs.get(d.recId); if (r) { r.live = false; r.stop = Date.now() }
     toast(`${d.name} stopped recording`)
     hqUpdate().then(() => offerHQ(d.recId))
@@ -209,11 +207,12 @@ function incomingBody() {
 // ======================= full-quality local copy (participant side) =======================
 const hq = {active: false, segs: [], cur: new Map(), recs: new Map(), dir: null}
 const hqDir = async () => hq.dir ??= await (await navigator.storage.getDirectory()).getDirectoryHandle('hq', {create: true})
-const hqWanted = () => settings.hq !== 'never' && [...hq.recs.values()].some(r => r.live)
+const liveRecs = () => [...hq.recs.values()].filter(r => r.live)
+const hqWanted = () => settings.hq !== 'never' && liveRecs().length > 0
 async function hqSaveManifest() {
   try {
     const w = await (await (await hqDir()).getFileHandle('manifest.json', {create: true})).createWritable()
-    await w.write(JSON.stringify({pid: PID, name: me.name, segs: hq.segs.filter(s => s.end).map(({id, key, kind, name, file, start, end, sentTo}) => ({id, key, kind, name, file, start, end, sentTo: [...sentTo]}))}))
+    await w.write(JSON.stringify({pid: PID, name: me.name, segs: hq.segs.filter(s => s.end).map(({id, key, pid, kind, name, file, start, end, sentTo}) => ({id, key, pid, kind, name, file, start, end, sentTo: [...sentTo]}))}))
     await w.close()
   } catch (e) { console.warn(e) }
 }
@@ -305,9 +304,24 @@ async function saveHQToFolder(segs) {
   return true
 }
 async function clearHQ(segs) {
-  const d = await hqDir()
+  const d = await hqDir(), ids = new Set(segs.map(s => s.id))
   for (const s of segs) await d.removeEntry(s.file).catch(() => {})
-  hq.segs = hq.segs.filter(s => !segs.includes(s)); await hqSaveManifest()
+  hq.segs = hq.segs.filter(s => !ids.has(s.id)); await hqSaveManifest()
+}
+// unsent full-quality files from an earlier call in this browser
+async function checkLeftovers() {
+  try {
+    const mf = JSON.parse(await (await (await (await hqDir()).getFileHandle('manifest.json')).getFile()).text())
+    hq.segs = (mf.segs || []).map(s => ({pid: mf.pid, ...s, sentTo: new Set(s.sentTo)}))
+  } catch { return }
+  const segs = hq.segs.filter(s => !s.sentTo.size)
+  if (!segs.length) return
+  const box = $('#leftoverHQ'), done = () => box.classList.add('hidden')
+  box.classList.remove('hidden')
+  box.replaceChildren(h('hr'), h('div', {}, `⚠️ ${segs.length} unsent full-quality file(s) from an earlier call.`),
+    h('div', {class: 'row'},
+      h('button', {onclick: async () => { if (await saveHQToFolder(segs)) { await clearHQ(segs); done() } }}, 'Save to folder…'),
+      h('button', {onclick: async () => { await clearHQ(segs); done() }}, 'Delete')))
 }
 
 // ======================= leaving =======================
@@ -349,4 +363,4 @@ addEventListener('beforeunload', e => {
   if (session || offering.size || pendingIncoming()) { e.preventDefault(); e.returnValue = '' }
 })
 
-export {session, pickRoot, startRecording, stopRecording, addMarker, callHooks, hq, hqDir, hqUpdate, saveHQToFolder, clearHQ, stopRecordingForLeave, finishTransfers, flushLogs}
+export {session, pickRoot, startRecording, stopRecording, addMarker, callHooks, hqUpdate, checkLeftovers, stopRecordingForLeave, finishTransfers, flushLogs}

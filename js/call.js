@@ -51,16 +51,15 @@ function updateTiles() {
 const liveItems = () => [...feeds.values()].map(f => ({key: f.key, name: feedName(f), kind: f.kind, el: f.el, camOff: f.kind === 'cam' && pidState(f.pid).cam === false, micOff: f.kind === 'cam' && pidState(f.pid).mic === false}))
 
 // ======================= program output (live mix) =======================
-const prog = {canvas: mkCanvas(PW, PH), sources: new Map(), dest: ac.createMediaStreamDestination(), recording: false, showPreview: false, clean: false}
+const prog = {canvas: mkCanvas(PW, PH), sources: new Map(), dest: ac.createMediaStreamDestination(), users: new Set()}
 prog.ctx = prog.canvas.getContext('2d')
-prog.stream = new MediaStream([prog.canvas.captureStream(30).getVideoTracks()[0], prog.dest.stream.getAudioTracks()[0]])
-window.programStream = prog.stream // hook for future live streaming (WHIP etc.)
-const progPrev = $('#progPreview').getContext('2d')
+const programStream = window.programStream = new MediaStream([prog.canvas.captureStream(30).getVideoTracks()[0], prog.dest.stream.getAudioTracks()[0]]) // window: hook for future live streaming (WHIP etc.)
+// the program only renders while someone uses it; a user with a ctx gets each frame copied to it
+const useProgram = (user, on) => on ? prog.users.add(user) : prog.users.delete(user)
 tickers.add(() => {
-  if (!room || !(prog.recording || prog.showPreview || prog.clean)) return
+  if (!room || !prog.users.size) return
   composite(prog.ctx, PW, PH, liveLayout, liveItems())
-  if (prog.showPreview) progPrev.drawImage(prog.canvas, 0, 0)
-  if (prog.clean) prog.cleanCtx.drawImage(prog.canvas, 0, 0)
+  for (const u of prog.users) u.ctx?.drawImage(prog.canvas, 0, 0)
 })
 function syncProgAudio() {
   const want = new Map()
@@ -104,7 +103,7 @@ async function joinCall(hooks) {
     if (first) chatLine(null, `${d.name} joined`)
     updateTiles(); liveCtl.render()
   }
-  A.feedEnd.onMessage = ({key}) => removeFeed(key)
+  A.feedEnd.onMessage = ({key}, {peerId}) => { if (feeds.get(key)?.peerId === peerId) removeFeed(key) }
   A.chat.onMessage = (text, {peerId}) => chatLine(peers.get(peerId)?.name || 'Guest', text)
   room.onPeerJoin = peerId => {
     if (!peers.has(peerId)) peers.set(peerId, {pid: null, name: 'Guest', mic: true, cam: true})
@@ -122,7 +121,7 @@ async function joinCall(hooks) {
     updateTiles()
   }
   room.onPeerStream = (stream, peerId, md) => {
-    const pid = md?.pid || peers.get(peerId)?.pid || peerId, kind = md?.kind || 'cam'
+    const pid = peers.get(peerId)?.pid || md?.pid || peerId, kind = md?.kind === 'screen' ? 'screen' : 'cam'
     addFeed({key: `${pid}:${kind}`, pid, kind, stream, local: false, peerId})
   }
 
@@ -134,6 +133,11 @@ async function joinCall(hooks) {
   chatLine(null, 'Joined. Waiting for others… share the invite link or room code.')
 }
 function sendHello(target) { A.hello?.send({pid: PID, name: me.name, mic: me.mic, cam: me.cam}, target ? {target} : undefined) }
+function sendChat(text) {
+  if (!A.chat) return false
+  A.chat.send(text); chatLine('You', text)
+  return true
+}
 function chatLine(who, text) {
   const d = h('div', {}, who ? h('b', {}, who + ': ') : h('i', {class: 'dim'}, ''), who ? text : h('span', {class: 'dim'}, text))
   $('#chatLog').append(d); $('#chatLog').scrollTop = 1e9
@@ -168,4 +172,4 @@ function stopSending() {
   toggleCam(false); toggleMic(false); stopLocalDevices()
 }
 
-export {room, A, roomCode, peers, feeds, liveLayout, pidName, prog, joinCall, chatLine, toggleMic, toggleCam, toggleScreen, stopSending}
+export {room, roomCode, peers, feeds, liveLayout, pidName, programStream, useProgram, joinCall, sendChat, toggleMic, toggleCam, toggleScreen, stopSending}
