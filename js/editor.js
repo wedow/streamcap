@@ -2,8 +2,6 @@ import {EXT, PW, PH} from './config.js'
 import {$, h, fmt, fmtMB, stamp, sleep, ensurePerm, toast, tickers, fileWriter, recordStream} from './util.js'
 import {ac, resumeAudio, stopLocalDevices} from './media.js'
 import {LAYOUT_MODES, defaultLayout, composite, layoutControls} from './layout.js'
-import {feeds} from './call.js'
-import {session, hq} from './recording.js'
 
 const ed = {open: false, t: 0, playing: false, segs: [], keys: new Map(), kfs: [], cuts: [], markers: [], states: {}, names: {}, inPt: null, rendering: null}
 ed.canvas = $('#edCanvas'); ed.ctx = ed.canvas.getContext('2d')
