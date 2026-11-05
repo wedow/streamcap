@@ -87,43 +87,51 @@ ticker.onmessage = () => {
 async function fileWriter(dir, name) {
   const fh = await dir.getFileHandle(name, {create: true})
   const w = await fh.createWritable()
-  let chain = Promise.resolve(), bytes = 0
+  let chain = Promise.resolve(), bytes = 0, error = null
+  const fail = e => {
+    if (error) return
+    error = e; console.error('write failed', name, e)
+    toast(`Writing “${name}” failed: ${e.message}`, 0)
+  }
   return {
-    name, fh, get bytes() { return bytes },
+    name, fh, get bytes() { return bytes }, get error() { return error },
     write(data) {
       const n = data.size ?? data.byteLength
-      chain = chain.then(() => w.write(data)).then(() => { bytes += n }).catch(e => console.error('write failed', name, e))
+      chain = chain.then(() => error || w.write(data).then(() => { bytes += n }, fail))
       return chain
     },
-    async close() { await chain; await w.close() }
+    async close() { await chain; await w.close().catch(fail) }
   }
 }
 function recordStream(stream, writer, opts = {}) {
   const mr = new MediaRecorder(stream, {mimeType: opts.mime || MIME, videoBitsPerSecond: opts.vbr || 4e6, audioBitsPerSecond: 160000})
-  let startedAt = null
+  let startedAt = null, stopping
   const started = new Promise(r => mr.addEventListener('start', () => { startedAt = Date.now(); r(startedAt) }))
   const stopped = new Promise(r => mr.addEventListener('stop', r))
-  mr.ondataavailable = e => { if (e.data.size) writer.write(e.data) }
+  const stop = () => stopping ??= (async () => {
+    if (mr.state !== 'inactive') mr.stop()
+    await stopped; await writer.close()
+    return Date.now()
+  })()
+  mr.ondataavailable = e => {
+    if (writer.error) stop()
+    else if (e.data.size) writer.write(e.data)
+  }
   mr.onerror = e => { console.warn('MediaRecorder error', e.error || e); opts.onerror?.(e) }
   mr.start(1000)
-  let stopping
-  return {
-    mr, writer, started, get startedAt() { return startedAt },
-    stop() { return stopping ??= (async () => { if (mr.state !== 'inactive') mr.stop(); await stopped; await writer.close(); return Date.now() })() }
-  }
+  return {mr, writer, started, stop, get startedAt() { return startedAt }}
 }
 class EventLog {
-  constructor(dir) { this.dir = dir; this.lines = []; this.dirty = false; this.iv = setInterval(() => this.flush(), 2000) }
+  constructor(dir) { this.dir = dir; this.lines = []; this.dirty = false; this.chain = Promise.resolve(); this.iv = setInterval(() => this.flush(), 2000) }
   add(type, data = {}) { const e = {t: Date.now(), type, ...data}; this.lines.push(JSON.stringify(e)); this.dirty = true; return e }
-  async flush() {
-    if (this.flushing) return this.flushing
-    if (!this.dirty) return
-    this.dirty = false
-    this.flushing = (async () => {
+  // queued after any in-flight write, so it always covers lines added before the call
+  flush() {
+    return this.chain = this.chain.then(async () => {
+      if (!this.dirty) return
+      this.dirty = false
       try { const w = await (await this.dir.getFileHandle('events.jsonl', {create: true})).createWritable(); await w.write(this.lines.join('\n') + '\n'); await w.close() }
       catch (e) { this.dirty = true; console.error('events flush', e) }
-    })()
-    await this.flushing; this.flushing = null
+    })
   }
 }
 
