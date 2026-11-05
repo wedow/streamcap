@@ -1,0 +1,11 @@
+{
+  "browser": {
+    "browserName": "chromium",
+    "launchOptions": {
+      "headless": true,
+      "args": ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+    },
+    "contextOptions": {"permissions": ["camera", "microphone", "clipboard-read", "clipboard-write"]},
+    "initScript": ["docs/qa/opfs-picker.js"]
+  }
+}
