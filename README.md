@@ -2,6 +2,8 @@
 
 Browser-only peer-to-peer recording studio. Static site, no build step.
 
+Live: https://wedow.github.io/streamcap/
+
 ## Run locally
 
 ES modules need HTTP, not `file://`:
